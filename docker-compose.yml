@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: openai_proxy
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: openai_proxy
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: password
+      PORT: 3000
+      JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
+      ADMIN_PASSWORD: admin123
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # For potential Docker-based MCP servers
+    restart: unless-stopped
+    command: sh -c "npm run migrate && npm start"
+
+volumes:
+  postgres_data:

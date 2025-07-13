@@ -1,0 +1,35 @@
+-- Add MCP servers table
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL UNIQUE,
+  command TEXT NOT NULL,
+  description TEXT,
+  allowed_directories TEXT[], -- For filesystem servers
+  active BOOLEAN DEFAULT true NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS mcp_servers_name_idx ON mcp_servers(name);
+CREATE INDEX IF NOT EXISTS mcp_servers_active_idx ON mcp_servers(active);
+
+-- Add mcp_server_id to tools table and make mcpServerCommand optional
+ALTER TABLE tools 
+ADD COLUMN mcp_server_id INTEGER REFERENCES mcp_servers(id),
+ADD COLUMN source_type VARCHAR(50) DEFAULT 'builtin' NOT NULL; -- 'builtin' or 'mcp'
+
+-- Update the type column to be more descriptive
+-- Keep existing 'function' and 'mcp' for backward compatibility but add source_type for clarity
+
+-- Add index for the new columns
+CREATE INDEX IF NOT EXISTS tools_mcp_server_idx ON tools(mcp_server_id);
+CREATE INDEX IF NOT EXISTS tools_source_type_idx ON tools(source_type);
+
+-- Drop the unique constraint on tool names to allow same tool name from different MCP servers
+DROP INDEX IF EXISTS tools_name_idx;
+CREATE INDEX IF NOT EXISTS tools_name_idx ON tools(name); -- Non-unique index
+
+-- Add a unique constraint that includes mcp_server_id for MCP tools
+-- This allows same tool name if they come from different sources
+DROP INDEX IF EXISTS tools_unique_name_source_idx;
+CREATE UNIQUE INDEX tools_unique_name_source_idx ON tools(name, COALESCE(mcp_server_id, -1));

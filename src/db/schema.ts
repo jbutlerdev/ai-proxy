@@ -49,7 +49,9 @@ export const messages = pgTable('messages', {
   functionCall: jsonb('function_call'),
   requestTokens: integer('request_tokens').default(0).notNull(),
   responseTokens: integer('response_tokens').default(0).notNull(),
+  reasoningTokens: integer('reasoning_tokens').default(0).notNull(),
   latencyMs: integer('latency_ms'),
+  timeToFirstTokenMs: integer('time_to_first_token_ms'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   metadata: jsonb('metadata'),
 }, (table) => ({

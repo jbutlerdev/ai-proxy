@@ -324,7 +324,8 @@ const McpServers: React.FC = () => {
         </Dialog.Root>
 
         <Card className="mcp-servers-table-card">
-          <div className="table-container">
+          {/* Desktop Table Layout */}
+          <div className="table-container desktop-only">
             <Table.Root>
               <Table.Header className="table-header">
                 <Table.Row>
@@ -417,6 +418,96 @@ const McpServers: React.FC = () => {
               </Table.Body>
             </Table.Root>
           </div>
+
+          {/* Mobile Card Layout */}
+          <div className="mobile-only">
+            {servers?.map((server: McpServer) => (
+              <div key={server.id} className="mobile-server-card">
+                <div className="mobile-server-header">
+                  <div className="mobile-server-info">
+                    <div className="mobile-server-name">
+                      <Server size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+                      {server.name}
+                    </div>
+                    {server.description && (
+                      <div className="mobile-server-description">
+                        {server.description}
+                      </div>
+                    )}
+                    <div className="mobile-server-command">
+                      <strong>Command:</strong> {server.command}
+                    </div>
+                    {server.allowedDirectories && server.allowedDirectories.length > 0 && (
+                      <div className="mobile-server-directories">
+                        <strong>Directories:</strong>
+                        <div className="mobile-directory-badges">
+                          {server.allowedDirectories.map((dir, idx) => (
+                            <Badge key={idx} size="1" variant="outline">
+                              {dir}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="mobile-server-actions">
+                  <div className="mobile-status-section">
+                    <Text size="2" color="gray">Active:</Text>
+                    <Switch
+                      checked={server.active}
+                      onCheckedChange={(checked) =>
+                        updateMutation.mutate({ id: server.id, active: checked })
+                      }
+                    />
+                  </div>
+                  
+                  <div className="mobile-actions-section">
+                    <Button
+                      size="1"
+                      variant="outline"
+                      onClick={() => handleDiscover(server)}
+                      disabled={discovering}
+                    >
+                      <Eye size={14} />
+                      Discover
+                    </Button>
+                    <Button
+                      size="1"
+                      variant="outline"
+                      onClick={() => syncMutation.mutate(server.id)}
+                      disabled={syncMutation.isPending}
+                    >
+                      <RefreshCw size={14} />
+                      Sync
+                    </Button>
+                    <Button
+                      size="1"
+                      variant="outline"
+                      onClick={() => handleEdit(server)}
+                    >
+                      <Edit2 size={14} />
+                      Edit
+                    </Button>
+                    <Button
+                      size="1"
+                      variant="outline"
+                      color="red"
+                      onClick={() => {
+                        if (confirm('Are you sure you want to delete this MCP server?')) {
+                          deleteMutation.mutate(server.id);
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} />
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </Card>
       </Flex>
 
@@ -436,6 +527,77 @@ const McpServers: React.FC = () => {
           border: 1px solid rgba(255, 255, 255, 0.1) !important;
         }
         
+        /* Desktop layout - show by default */
+        .desktop-only {
+          display: block;
+        }
+        
+        .mobile-only {
+          display: none;
+        }
+        
+        /* Mobile server cards */
+        .mobile-server-card {
+          background-color: #0a0a0a;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
+          padding: 16px;
+          margin-bottom: 12px;
+        }
+        
+        .mobile-server-name {
+          font-weight: 600;
+          font-size: 16px;
+          margin-bottom: 8px;
+          display: flex;
+          align-items: center;
+          color: #ffffff;
+        }
+        
+        .mobile-server-description {
+          font-size: 14px;
+          color: #9ca3af;
+          margin-bottom: 8px;
+          line-height: 1.4;
+        }
+        
+        .mobile-server-command {
+          font-size: 12px;
+          color: #e5e7eb;
+          margin-bottom: 8px;
+          word-break: break-all;
+          font-family: monospace;
+        }
+        
+        .mobile-server-directories {
+          margin-bottom: 16px;
+        }
+        
+        .mobile-directory-badges {
+          display: flex;
+          gap: 4px;
+          margin-top: 4px;
+          flex-wrap: wrap;
+        }
+        
+        .mobile-server-actions {
+          border-top: 1px solid rgba(255, 255, 255, 0.1);
+          padding-top: 12px;
+        }
+        
+        .mobile-status-section {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+        
+        .mobile-actions-section {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        
         @media (max-width: 768px) {
           .mcp-servers-container {
             padding: 16px;
@@ -452,18 +614,20 @@ const McpServers: React.FC = () => {
             display: none;
           }
           
-          .status-column,
-          .actions-column {
-            display: none;
+          /* Hide desktop layout on mobile */
+          .desktop-only {
+            display: none !important;
           }
           
-          .status-cell,
-          .actions-cell {
-            display: none;
+          /* Show mobile layout on mobile */
+          .mobile-only {
+            display: block !important;
           }
           
-          .button-text {
-            display: none;
+          .mcp-servers-table-card {
+            padding: 0;
+            background-color: transparent !important;
+            border: none !important;
           }
         }
       `}</style>

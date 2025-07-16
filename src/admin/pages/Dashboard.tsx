@@ -42,7 +42,7 @@ const Dashboard: React.FC = () => {
       icon: MessageSquare,
       label: 'Conversations',
       value: conversations?.length || 0,
-      active: conversations?.filter((c: any) => c.endedAt).length || 0,
+      active: conversations?.filter((c: any) => !c.endedAt).length || 0,
       color: '#f59e0b',
       link: '/conversations',
     },
@@ -104,20 +104,25 @@ const Dashboard: React.FC = () => {
               Recent Activity
             </Text>
             <div className="activity-list">
-              {conversations?.slice(0, 5).map((conversation: any) => (
-                <Flex key={conversation.id} justify="between" align="center" py="2" className="activity-item">
-                  <Box>
-                    <Text size="2" weight="medium">
-                      {conversation.model}
-                    </Text>
+              {conversations?.slice(0, 5).map((conversation: any, index: number) => (
+                <div key={conversation.id}>
+                  <Flex justify="between" align="center" py="2" className="activity-item">
+                    <Box style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <Text size="2" weight="medium">
+                        {conversation.model}
+                      </Text>
+                      <Text size="1" color="gray">
+                        {conversation.apiKeyName}
+                      </Text>
+                    </Box>
                     <Text size="1" color="gray">
-                      {conversation.apiKeyName}
+                      {new Date(conversation.startedAt).toLocaleDateString()}
                     </Text>
-                  </Box>
-                  <Text size="1" color="gray">
-                    {new Date(conversation.startedAt).toLocaleDateString()}
-                  </Text>
-                </Flex>
+                  </Flex>
+                  {index < conversations.slice(0, 5).length - 1 && (
+                    <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.1)', margin: '0 16px' }} />
+                  )}
+                </div>
               ))}
             </div>
           </Card>
@@ -135,15 +140,20 @@ const Dashboard: React.FC = () => {
               )
                 .sort(([, a], [, b]) => (b as number) - (a as number))
                 .slice(0, 5)
-                .map(([model, count]) => (
-                  <Flex key={model as string} justify="between" align="center" py="2" className="model-item">
-                    <Text size="2" weight="medium">
-                      {model as string}
-                    </Text>
-                    <Text size="1" color="gray">
-                      {count as number} uses
-                    </Text>
-                  </Flex>
+                .map(([model, count], index: number, array: any[]) => (
+                  <div key={model as string}>
+                    <Flex justify="between" align="center" py="2" className="model-item">
+                      <Text size="2" weight="medium">
+                        {model as string}
+                      </Text>
+                      <Text size="1" color="gray">
+                        {count as number} uses
+                      </Text>
+                    </Flex>
+                    {index < array.length - 1 && (
+                      <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.1)', margin: '0 16px' }} />
+                    )}
+                  </div>
                 ))}
             </div>
           </Card>

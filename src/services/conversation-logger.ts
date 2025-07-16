@@ -2,10 +2,25 @@ import { db } from '../db';
 import { conversations, messages, toolExecutions } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { ChatMessage, ChatCompletionRequest, ChatCompletionResponse } from '../types/openai';
+import { ChatMessage, ChatCompletionRequest, ChatCompletionResponse, ContentPart } from '../types/openai';
 
 export class ConversationLogger {
   private activeConversations: Map<string, string> = new Map();
+
+  private serializeContent(content: string | null | ContentPart[] | undefined): string | null {
+    if (content === null || content === undefined) return null;
+    if (content === '') return ''; // Preserve empty string instead of converting to null
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      // Convert array of content parts to string representation
+      return content.map(part => {
+        if (part.type === 'text') return part.text || '';
+        if (part.type === 'image_url') return `[IMAGE: ${part.image_url?.url || 'URL not available'}]`;
+        return '';
+      }).join('');
+    }
+    return null;
+  }
 
   async startConversation(
     apiKeyId: number,
@@ -34,7 +49,7 @@ export class ConversationLogger {
       await db.insert(messages).values({
         conversationId,
         role: message.role,
-        content: message.content,
+        content: this.serializeContent(message.content),
         toolCalls: message.tool_calls,
         toolCallId: message.tool_call_id,
         name: message.name,
@@ -49,7 +64,9 @@ export class ConversationLogger {
     conversationId: string,
     response: ChatCompletionResponse,
     responseTokens: number,
-    latencyMs: number
+    latencyMs: number,
+    reasoningTokens: number = 0,
+    timeToFirstTokenMs?: number
   ): Promise<void> {
     if (!response.choices || response.choices.length === 0) {
       return;
@@ -67,13 +84,15 @@ export class ConversationLogger {
       await db.insert(messages).values({
         conversationId,
         role: assistantMessage.role,
-        content: assistantMessage.content,
+        content: this.serializeContent(assistantMessage.content),
         toolCalls: assistantMessage.tool_calls,
         name: assistantMessage.name,
         functionCall: assistantMessage.function_call,
         requestTokens: 0,
         responseTokens,
+        reasoningTokens,
         latencyMs,
+        timeToFirstTokenMs,
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
       });
     }

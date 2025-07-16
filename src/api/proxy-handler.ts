@@ -3,7 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { OpenAIClient } from '../services/openai-client';
 import { ToolService } from '../services/tool-service';
 import { ConversationLogger } from '../services/conversation-logger';
-import { ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ToolCall } from '../types/openai';
+import { ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ToolCall, ContentPart } from '../types/openai';
 import { Readable } from 'stream';
 import { db } from '../db';
 import { upstreamModels, upstreamServers, messages } from '../db/schema';
@@ -20,8 +20,22 @@ export class ProxyHandler {
     this.conversationLogger = new ConversationLogger();
   }
 
+  private serializeContent(content: string | null | ContentPart[] | undefined): string | null {
+    if (!content) return null;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      // Convert array of content parts to string representation
+      return content.map(part => {
+        if (part.type === 'text') return part.text || '';
+        if (part.type === 'image_url') return `[IMAGE: ${part.image_url?.url || 'URL not available'}]`;
+        return '';
+      }).join('');
+    }
+    return null;
+  }
+
   async handleChatCompletion(req: AuthenticatedRequest, res: Response) {
-    // API is open - req.apiKey will always be set (anonymous if no auth header)
+    // API key authentication is required - req.apiKey will always be set
 
     const request = req.body as ChatCompletionRequest;
     
@@ -95,6 +109,7 @@ export class ProxyHandler {
     ) as ChatCompletionResponse;
 
     // Handle tool calls
+    console.log('Initial response has tool calls:', !!response.choices?.[0]?.message?.tool_calls);
     response = await this.handleToolCalls(
       response,
       request,
@@ -103,18 +118,22 @@ export class ProxyHandler {
       upstreamConfig,
       conversationId
     );
+    console.log('After handleToolCalls, response has tool calls:', !!response.choices?.[0]?.message?.tool_calls);
 
     // Filter out proxy tools from the response
     const filteredResponse = this.toolService.filterProxyTools(response, proxyToolNames);
+    console.log('After filtering, response has tool calls:', !!filteredResponse.choices?.[0]?.message?.tool_calls);
 
     // Log the response
     const latencyMs = Date.now() - startTime;
     const responseTokens = response.usage?.completion_tokens || 0;
+    const reasoningTokens = response.usage?.completion_details?.reasoning_tokens || 0;
     await this.conversationLogger.logResponse(
       conversationId,
       response,
       responseTokens,
-      latencyMs
+      latencyMs,
+      reasoningTokens
     );
 
     // End conversation
@@ -131,6 +150,82 @@ export class ProxyHandler {
     req: AuthenticatedRequest,
     res: Response
   ) {
+    // If no proxy tools, just pass through the stream unchanged
+    if (proxyToolNames.length === 0) {
+      return this.handleStreamingPassthrough(request, upstreamConfig, conversationId, res);
+    }
+
+    // Buffer the entire response to check for tool calls
+    const response = await this.openAIClient.createChatCompletion(
+      { ...request, stream: false }, // Force non-streaming to get complete response
+      upstreamConfig.apiKey,
+      upstreamConfig.baseUrl
+    ) as ChatCompletionResponse;
+
+    // Check if the response contains any proxy tool calls
+    const hasProxyToolCalls = response.choices?.[0]?.message?.tool_calls?.some(tc => 
+      proxyToolNames.includes(tc.function.name)
+    );
+
+    // If no proxy tool calls, just pass through the response as stream
+    if (!hasProxyToolCalls) {
+      console.log('No proxy tool calls in response, passing through as stream');
+      await this.replayResponseAsStream(response, res);
+      
+      // Log the response that was streamed
+      const responseTokens = response.usage?.completion_tokens || 0;
+      const reasoningTokens = response.usage?.completion_details?.reasoning_tokens || 0;
+      await this.conversationLogger.logResponse(
+        conversationId,
+        response,
+        responseTokens,
+        0,
+        reasoningTokens
+      );
+      
+      await this.conversationLogger.endConversation(conversationId);
+      return;
+    }
+
+    // Handle tool calls if present
+    console.log('Streaming: Initial response has tool calls:', !!response.choices?.[0]?.message?.tool_calls);
+    const finalResponse = await this.handleToolCalls(
+      response,
+      request,
+      proxyToolNames,
+      req.apiKey!.id,
+      upstreamConfig,
+      conversationId
+    );
+    console.log('Streaming: After handleToolCalls, response has tool calls:', !!finalResponse.choices?.[0]?.message?.tool_calls);
+    console.log('Streaming: Final response content:', typeof finalResponse.choices?.[0]?.message?.content === 'string' 
+      ? finalResponse.choices?.[0]?.message?.content?.substring(0, 100)
+      : 'Content is not a string');
+
+    // Now stream the final response
+    await this.replayResponseAsStream(finalResponse, res);
+
+    // Log the response
+    const responseTokens = finalResponse.usage?.completion_tokens || 0;
+    const reasoningTokens = finalResponse.usage?.completion_details?.reasoning_tokens || 0;
+    await this.conversationLogger.logResponse(
+      conversationId,
+      finalResponse,
+      responseTokens,
+      0,
+      reasoningTokens
+    );
+
+    await this.conversationLogger.endConversation(conversationId);
+  }
+
+  private async handleStreamingPassthrough(
+    request: ChatCompletionRequest,
+    upstreamConfig: any,
+    conversationId: string,
+    res: Response
+  ) {
+    const startTime = Date.now();
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -143,6 +238,13 @@ export class ProxyHandler {
 
     let buffer = '';
     let totalTokens = 0;
+    let accumulatedContent = '';
+    let accumulatedReasoningContent = '';
+    let streamId = '';
+    let streamModel = '';
+    let finishReason = '';
+    let timeToFirstToken: number | undefined;
+    let accumulatedToolCalls: any[] = [];
 
     stream.on('data', (chunk: Buffer) => {
       const data = chunk.toString();
@@ -162,13 +264,61 @@ export class ProxyHandler {
 
           try {
             const parsed = JSON.parse(jsonStr);
-            // Filter proxy tools from streamed chunks
-            const filtered = this.toolService.filterProxyTools(parsed, proxyToolNames);
-            res.write(`data: ${JSON.stringify(filtered)}\n\n`);
             
-            // Count tokens (simplified)
+            // Capture stream metadata
+            if (parsed.id) streamId = parsed.id;
+            if (parsed.model) streamModel = parsed.model;
+            
+            // Pass through unchanged since no proxy tools
+            res.write(`data: ${JSON.stringify(parsed)}\n\n`);
+            
+            // Accumulate content for logging
             if (parsed.choices?.[0]?.delta?.content) {
+              accumulatedContent += parsed.choices[0].delta.content;
               totalTokens += parsed.choices[0].delta.content.split(' ').length;
+              
+              // Track time to first token
+              if (timeToFirstToken === undefined) {
+                timeToFirstToken = Date.now() - startTime;
+              }
+            }
+            if (parsed.choices?.[0]?.delta?.reasoning_content) {
+              accumulatedReasoningContent += parsed.choices[0].delta.reasoning_content;
+            }
+            
+            // Handle tool calls in streaming
+            if (parsed.choices?.[0]?.delta?.tool_calls) {
+              const deltaToolCalls = parsed.choices[0].delta.tool_calls;
+              for (const toolCall of deltaToolCalls) {
+                if (toolCall.index !== undefined) {
+                  // Initialize or update tool call at index
+                  if (!accumulatedToolCalls[toolCall.index]) {
+                    accumulatedToolCalls[toolCall.index] = {
+                      id: toolCall.id || '',
+                      type: 'function',
+                      function: {
+                        name: toolCall.function?.name || '',
+                        arguments: ''
+                      }
+                    };
+                  }
+                  
+                  // Update tool call data
+                  if (toolCall.id) {
+                    accumulatedToolCalls[toolCall.index].id = toolCall.id;
+                  }
+                  if (toolCall.function?.name) {
+                    accumulatedToolCalls[toolCall.index].function.name = toolCall.function.name;
+                  }
+                  if (toolCall.function?.arguments) {
+                    accumulatedToolCalls[toolCall.index].function.arguments += toolCall.function.arguments;
+                  }
+                }
+              }
+            }
+            
+            if (parsed.choices?.[0]?.finish_reason) {
+              finishReason = parsed.choices[0].finish_reason;
             }
           } catch (e) {
             // Ignore parse errors
@@ -178,6 +328,39 @@ export class ProxyHandler {
     });
 
     stream.on('end', async () => {
+      // Log the accumulated streaming response
+      // Always log response even if content is empty string
+      const streamingResponse = {
+          id: streamId,
+          object: 'chat.completion' as const,
+          created: Math.floor(Date.now() / 1000),
+          model: streamModel,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant' as const,
+              content: accumulatedContent || null,
+              reasoning_content: accumulatedReasoningContent || undefined,
+              tool_calls: accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+            },
+            finish_reason: finishReason as 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'function_call' | null
+          }],
+          usage: {
+            completion_tokens: totalTokens,
+            prompt_tokens: 0, // We don't have this from streaming
+            total_tokens: totalTokens
+          }
+        };
+
+      await this.conversationLogger.logResponse(
+        conversationId,
+        streamingResponse,
+        totalTokens,
+        0, // No latency calculation for streaming
+        0, // No reasoning tokens from streaming estimation
+        timeToFirstToken
+      );
+
       await this.conversationLogger.endConversation(conversationId);
       res.end();
     });
@@ -186,6 +369,136 @@ export class ProxyHandler {
       console.error('Stream error:', error);
       res.end();
     });
+  }
+
+  private async replayResponseAsStream(response: ChatCompletionResponse, res: Response) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // Simulate streaming by breaking the response into chunks
+    const message = response.choices?.[0]?.message;
+    
+    if (!message || !response.choices || response.choices.length === 0) {
+      // No message in response, send error
+      console.log('No message in response or empty choices array');
+      res.write(`data: ${JSON.stringify({error: "No message in response"})}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+    
+    // Always send initial chunk with role
+    const roleChunk = {
+      id: response.id,
+      object: 'chat.completion.chunk',
+      created: response.created,
+      model: response.model,
+      choices: [{
+        index: 0,
+        delta: { role: message.role },
+        finish_reason: null
+      }]
+    };
+    res.write(`data: ${JSON.stringify(roleChunk)}\n\n`);
+
+    // Send content if present
+    if (message.content) {
+      const content = message.content;
+      const chunkSize = 1; // Send character by character for smooth streaming
+      for (let i = 0; i < content.length; i += chunkSize) {
+        const chunk = content.slice(i, i + chunkSize);
+        const contentChunk = {
+          id: response.id,
+          object: 'chat.completion.chunk',
+          created: response.created,
+          model: response.model,
+          choices: [{
+            index: 0,
+            delta: { content: chunk },
+            finish_reason: null
+          }]
+        };
+        res.write(`data: ${JSON.stringify(contentChunk)}\n\n`);
+        
+        // Small delay to simulate real streaming
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+    }
+
+    // Send tool calls if present
+    if (message?.tool_calls && message.tool_calls.length > 0) {
+      for (let i = 0; i < message.tool_calls.length; i++) {
+        const toolCall = message.tool_calls[i];
+        
+        // Send tool call start with ID and function name
+        const toolCallStartChunk = {
+          id: response.id,
+          object: 'chat.completion.chunk',
+          created: response.created,
+          model: response.model,
+          choices: [{
+            index: 0,
+            delta: {
+              tool_calls: [{
+                index: i,
+                id: toolCall.id,
+                type: 'function',
+                function: {
+                  name: toolCall.function.name,
+                  arguments: ''
+                }
+              }]
+            },
+            finish_reason: null
+          }]
+        };
+        res.write(`data: ${JSON.stringify(toolCallStartChunk)}\n\n`);
+        
+        // Stream the arguments in chunks
+        const args = toolCall.function.arguments;
+        const argChunkSize = 10;
+        for (let j = 0; j < args.length; j += argChunkSize) {
+          const argChunk = args.slice(j, j + argChunkSize);
+          const toolCallArgChunk = {
+            id: response.id,
+            object: 'chat.completion.chunk',
+            created: response.created,
+            model: response.model,
+            choices: [{
+              index: 0,
+              delta: {
+                tool_calls: [{
+                  index: i,
+                  function: {
+                    arguments: argChunk
+                  }
+                }]
+              },
+              finish_reason: null
+            }]
+          };
+          res.write(`data: ${JSON.stringify(toolCallArgChunk)}\n\n`);
+          await new Promise(resolve => setTimeout(resolve, 1));
+        }
+      }
+    }
+
+    // Send final chunk with finish_reason
+    const finishChunk = {
+      id: response.id,
+      object: 'chat.completion.chunk',
+      created: response.created,
+      model: response.model,
+      choices: [{
+        index: 0,
+        delta: {},
+        finish_reason: response.choices[0]?.finish_reason || 'stop'
+      }]
+    };
+    res.write(`data: ${JSON.stringify(finishChunk)}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
   }
 
   private async handleToolCalls(
@@ -201,11 +514,15 @@ export class ProxyHandler {
     }
 
     const toolCalls = response.choices[0].message.tool_calls;
+    console.log('All tool calls:', toolCalls.map(tc => tc.function.name));
+    console.log('Proxy tool names:', proxyToolNames);
     const proxyToolCalls = toolCalls.filter(tc => 
       proxyToolNames.includes(tc.function.name)
     );
+    console.log('Proxy tool calls found:', proxyToolCalls.length);
 
     if (proxyToolCalls.length === 0) {
+      console.log('No proxy tool calls found, returning original response');
       return response;
     }
 
@@ -247,7 +564,7 @@ export class ProxyHandler {
         await db.insert(messages).values({
           conversationId,
           role: 'tool',
-          content: toolResult.content,
+          content: this.serializeContent(toolResult.content),
           toolCallId: toolCall.id,
           name: toolCall.function.name,
           requestTokens: 0,
@@ -259,6 +576,7 @@ export class ProxyHandler {
     // Continue the conversation with tool results
     const continuationRequest: ChatCompletionRequest = {
       ...request,
+      stream: false, // Force non-streaming for tool continuation
       messages: [
         ...request.messages,
         response.choices[0].message!,
@@ -266,12 +584,32 @@ export class ProxyHandler {
       ],
     };
 
-    return this.handleToolCalls(
-      await this.openAIClient.createChatCompletion(
+    console.log('Making continuation request with', continuationRequest.messages.length, 'messages');
+    console.log('Last message roles:', continuationRequest.messages.slice(-3).map(m => m.role));
+    console.log('Full continuation request:', JSON.stringify(continuationRequest, null, 2));
+
+    let continuationResponse: ChatCompletionResponse;
+    try {
+      continuationResponse = await this.openAIClient.createChatCompletion(
         continuationRequest,
         upstreamConfig.apiKey,
         upstreamConfig.baseUrl
-      ) as ChatCompletionResponse,
+      ) as ChatCompletionResponse;
+    } catch (error) {
+      console.error('Error in continuation request:', error);
+      throw error;
+    }
+
+    console.log('Continuation response:', {
+      hasContent: !!continuationResponse.choices?.[0]?.message?.content,
+      contentLength: continuationResponse.choices?.[0]?.message?.content?.length,
+      hasToolCalls: !!continuationResponse.choices?.[0]?.message?.tool_calls,
+      finishReason: continuationResponse.choices?.[0]?.finish_reason
+    });
+    console.log('Full continuation response:', JSON.stringify(continuationResponse, null, 2));
+
+    return this.handleToolCalls(
+      continuationResponse,
       continuationRequest,
       proxyToolNames,
       apiKeyId,
@@ -285,7 +623,19 @@ export class ProxyHandler {
     let tokens = 0;
     for (const message of messages) {
       if (message.content) {
-        tokens += message.content.split(' ').length * 1.3;
+        if (typeof message.content === 'string') {
+          tokens += message.content.split(' ').length * 1.3;
+        } else if (Array.isArray(message.content)) {
+          // Handle multi-modal content (array of text/image parts)
+          for (const part of message.content) {
+            if (part.type === 'text' && part.text) {
+              tokens += part.text.split(' ').length * 1.3;
+            } else if (part.type === 'image_url') {
+              // Rough estimate for image tokens
+              tokens += 85; // OpenAI's estimate for low-detail images
+            }
+          }
+        }
       }
     }
     return Math.round(tokens);

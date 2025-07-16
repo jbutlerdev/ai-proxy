@@ -458,7 +458,7 @@ const UpstreamServers: React.FC = () => {
           }
           
           .server-item .button-text {
-            display: none;
+            display: inline !important;
           }
         }
         

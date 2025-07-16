@@ -21,7 +21,7 @@ export interface ChatCompletionRequest {
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'function' | 'tool';
-  content?: string | null;
+  content?: string | null | ContentPart[];
   name?: string;
   function_call?: {
     name: string;
@@ -29,6 +29,15 @@ export interface ChatMessage {
   };
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+}
+
+export interface ContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: {
+    url: string;
+    detail?: 'low' | 'high' | 'auto';
+  };
 }
 
 export interface FunctionDefinition {
@@ -62,6 +71,16 @@ export interface ChatCompletionResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    prompt_details?: {
+      cached_tokens?: number;
+      audio_tokens?: number;
+    };
+    completion_details?: {
+      reasoning_tokens?: number;
+      audio_tokens?: number;
+      accepted_prediction_tokens?: number;
+      rejected_prediction_tokens?: number;
+    };
   };
 }
 

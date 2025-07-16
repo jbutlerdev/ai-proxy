@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Box, Card, Flex, Text, Button, TextField, Switch, Table, Dialog, TextArea, Select, Badge, Tabs } from '@radix-ui/themes';
+import { Box, Card, Flex, Text, Button, TextField, Switch, Table, Dialog, TextArea, Select, Badge } from '@radix-ui/themes';
 import { Plus, Wrench, Edit2, Trash2, Server, Code } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { adminApi } from '../api/client';
@@ -25,7 +25,6 @@ const Tools: React.FC = () => {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
   const [editingTool, setEditingTool] = useState<Tool | null>(null);
-  const [filterBy, setFilterBy] = useState<'all' | 'builtin' | 'mcp'>('all');
   const queryClient = useQueryClient();
 
   const [formData, setFormData] = useState({
@@ -133,14 +132,12 @@ const Tools: React.FC = () => {
   };
 
   const filteredTools = tools?.filter((tool: Tool) => {
-    if (filterBy === 'all') return true;
-    return tool.sourceType === filterBy;
+    // Only show built-in tools on this page
+    return tool.sourceType === 'builtin';
   });
 
   const groupedTools = filteredTools?.reduce((acc: any, tool: Tool) => {
-    const key = tool.sourceType === 'mcp' && tool.mcpServerName 
-      ? tool.mcpServerName 
-      : 'Built-in Tools';
+    const key = 'Built-in Tools';
     if (!acc[key]) acc[key] = [];
     acc[key].push(tool);
     return acc;
@@ -165,7 +162,7 @@ const Tools: React.FC = () => {
               Tools
             </Text>
             <Text size="3" style={{ color: '#9ca3af' }}>
-              Manage tools available for the proxy
+              Manage custom built-in tools. MCP tools are managed via MCP Servers.
             </Text>
           </Flex>
           <Button onClick={() => setShowCreateForm(true)} className="create-button">
@@ -174,14 +171,7 @@ const Tools: React.FC = () => {
           </Button>
         </Flex>
 
-        <Tabs.Root defaultValue="all" onValueChange={(value) => setFilterBy(value as any)}>
-          <Tabs.List>
-            <Tabs.Trigger value="all">All Tools</Tabs.Trigger>
-            <Tabs.Trigger value="builtin">Built-in</Tabs.Trigger>
-            <Tabs.Trigger value="mcp">MCP Tools</Tabs.Trigger>
-          </Tabs.List>
-
-          <Box mt="4">
+        <Box>
             {Object.entries(groupedTools || {}).map(([groupName, groupTools]: [string, any]) => (
               <Card key={groupName} className="tools-group-card" mb="4">
                 <Flex align="center" gap="2" mb="3">
@@ -190,7 +180,8 @@ const Tools: React.FC = () => {
                   <Badge size="1" variant="soft">{groupTools.length}</Badge>
                 </Flex>
                 
-                <div className="table-container">
+                {/* Desktop Table Layout */}
+                <div className="table-container desktop-only">
                   <Table.Root>
                     <Table.Header className="table-header">
                       <Table.Row>
@@ -246,10 +237,62 @@ const Tools: React.FC = () => {
                     </Table.Body>
                   </Table.Root>
                 </div>
+
+                {/* Mobile Card Layout */}
+                <div className="mobile-only">
+                  {groupTools.map((tool: Tool) => (
+                    <div key={tool.id} className="mobile-tool-card">
+                      <div className="mobile-tool-header">
+                        <div className="mobile-tool-info">
+                          <div className="mobile-tool-name">
+                            <Wrench size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+                            {tool.name}
+                          </div>
+                          <div className="mobile-tool-description">
+                            {tool.description}
+                          </div>
+                          <div className="mobile-tool-badges">
+                            <Badge size="1" variant="outline">
+                              {tool.type}
+                            </Badge>
+                            <Badge size="1" variant="soft">
+                              {tool.sourceType === 'mcp' ? 'MCP' : 'Built-in'}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="mobile-tool-actions">
+                        <div className="mobile-status-section">
+                          <Text size="2" color="gray">Status:</Text>
+                          <Switch
+                            checked={tool.active}
+                            onCheckedChange={(checked) =>
+                              updateMutation.mutate({ id: tool.id, active: checked })
+                            }
+                            disabled={tool.sourceType === 'mcp'}
+                          />
+                        </div>
+                        
+                        <div className="mobile-actions-section">
+                          {tool.sourceType === 'builtin' && (
+                            <Button
+                              size="2"
+                              variant="outline"
+                              onClick={() => handleEdit(tool)}
+                            >
+                              <Edit2 size={14} />
+                              Edit
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </Card>
             ))}
-          </Box>
-        </Tabs.Root>
+        </Box>
 
         <Dialog.Root open={showCreateForm} onOpenChange={setShowCreateForm}>
           <Dialog.Content style={{ maxWidth: 600 }}>
@@ -384,6 +427,65 @@ const Tools: React.FC = () => {
           padding: 20px !important;
         }
         
+        /* Desktop layout - show by default */
+        .desktop-only {
+          display: block;
+        }
+        
+        .mobile-only {
+          display: none;
+        }
+        
+        /* Mobile tool cards */
+        .mobile-tool-card {
+          background-color: #0a0a0a;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
+          padding: 16px;
+          margin-bottom: 12px;
+        }
+        
+        .mobile-tool-name {
+          font-weight: 600;
+          font-size: 16px;
+          margin-bottom: 8px;
+          display: flex;
+          align-items: center;
+          color: #ffffff;
+        }
+        
+        .mobile-tool-description {
+          font-size: 14px;
+          color: #9ca3af;
+          margin-bottom: 12px;
+          line-height: 1.4;
+        }
+        
+        .mobile-tool-badges {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 16px;
+        }
+        
+        .mobile-tool-actions {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          border-top: 1px solid rgba(255, 255, 255, 0.1);
+          padding-top: 12px;
+        }
+        
+        .mobile-status-section {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .mobile-actions-section {
+          display: flex;
+          gap: 8px;
+        }
+        
         @media (max-width: 768px) {
           .tools-container {
             padding: 16px;
@@ -400,20 +502,18 @@ const Tools: React.FC = () => {
             display: none;
           }
           
-          .type-column,
-          .status-column,
-          .actions-column {
-            display: none;
+          .tools-group-card {
+            padding: 16px !important;
           }
           
-          .type-cell,
-          .status-cell,
-          .actions-cell {
-            display: none;
+          /* Hide desktop layout on mobile */
+          .desktop-only {
+            display: none !important;
           }
           
-          .button-text {
-            display: none;
+          /* Show mobile layout on mobile */
+          .mobile-only {
+            display: block !important;
           }
         }
       `}</style>

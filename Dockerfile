@@ -56,7 +56,16 @@ COPY migrate.js ./
 
 # Change ownership to app user
 RUN chown -R openai-proxy:nodejs /app
-USER openai-proxy
+
+# Create a script to ensure credentials directory exists with correct permissions
+RUN echo '#!/bin/sh' > /usr/local/bin/init-credentials.sh && \
+    echo 'mkdir -p /home/openai-proxy/.google_workspace_mcp/credentials' >> /usr/local/bin/init-credentials.sh && \
+    echo 'chown -R openai-proxy:nodejs /home/openai-proxy/.google_workspace_mcp' >> /usr/local/bin/init-credentials.sh && \
+    echo 'exec su-exec openai-proxy "$@"' >> /usr/local/bin/init-credentials.sh && \
+    chmod +x /usr/local/bin/init-credentials.sh
+
+# Install su-exec for clean user switching
+RUN apk add --no-cache su-exec
 
 # Expose port
 EXPOSE 3000
@@ -66,4 +75,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:3000/health || exit 1
 
 # Start the application
+ENTRYPOINT ["/usr/local/bin/init-credentials.sh"]
 CMD ["npm", "start"]

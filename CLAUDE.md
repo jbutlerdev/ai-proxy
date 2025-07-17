@@ -13,29 +13,7 @@ This is an OpenAI API Proxy Server that acts as a transparent proxy for the Open
 # Install dependencies
 npm install
 
-# Run development server with hot reload
-npm run dev
-
-# Build the project (TypeScript + frontend)
-npm run build
-
-# Run tests
-npm test
-
-# Run a specific test file
-npm test -- src/services/openai-client.test.ts
-
-# Type checking
-npm run typecheck
-
-# Linting
-npm run lint
-
-# Database migrations
-npm run migrate
-
-# Start production server
-npm start
+use ./build_and_deploy.sh to build and run the app
 ```
 
 ### Docker Commands

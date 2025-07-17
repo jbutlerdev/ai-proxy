@@ -65,6 +65,7 @@ export const mcpServers = pgTable('mcp_servers', {
   command: text('command').notNull(),
   description: text('description'),
   allowedDirectories: text('allowed_directories').array(),
+  environmentVariables: jsonb('environment_variables').default({}),
   active: boolean('active').default(true).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),

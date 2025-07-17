@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Box, Card, Flex, Text, Button, TextField, Switch, Table, Dialog, TextArea, Badge } from '@radix-ui/themes';
-import { Plus, Server, Edit2, Trash2, RefreshCw, Eye } from 'lucide-react';
+import { Plus, Server, Edit2, Trash2, RefreshCw, Eye, Key } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { adminApi } from '../api/client';
 
@@ -11,6 +11,7 @@ interface McpServer {
   command: string;
   description: string | null;
   allowedDirectories: string[] | null;
+  environmentVariables: Record<string, string> | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -23,6 +24,9 @@ const McpServers: React.FC = () => {
   const [showDiscoveredTools, setShowDiscoveredTools] = useState(false);
   const [discoveredTools, setDiscoveredTools] = useState<any[]>([]);
   const [discovering, setDiscovering] = useState(false);
+  const [showAvailableTools, setShowAvailableTools] = useState(false);
+  const [availableTools, setAvailableTools] = useState<any[]>([]);
+  const [loadingTools, setLoadingTools] = useState(false);
   const queryClient = useQueryClient();
 
   const [formData, setFormData] = useState({
@@ -30,6 +34,7 @@ const McpServers: React.FC = () => {
     command: '',
     description: '',
     allowedDirectories: '',
+    environmentVariables: '',
   });
 
   const { data: servers, isLoading } = useQuery({
@@ -38,7 +43,7 @@ const McpServers: React.FC = () => {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; command: string; description?: string; allowedDirectories?: string[] }) =>
+    mutationFn: (data: { name: string; command: string; description?: string; allowedDirectories?: string[]; environmentVariables?: Record<string, string> }) =>
       adminApi.createMcpServer(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcpServers'] });
@@ -93,6 +98,7 @@ const McpServers: React.FC = () => {
       command: '',
       description: '',
       allowedDirectories: '',
+      environmentVariables: '',
     });
     setShowCreateForm(false);
   };
@@ -103,21 +109,51 @@ const McpServers: React.FC = () => {
       .map((d) => d.trim())
       .filter((d) => d);
 
+    let environmentVariables: Record<string, string> = {};
+    if (formData.environmentVariables.trim()) {
+      try {
+        // Parse environment variables from KEY=VALUE format
+        const envLines = formData.environmentVariables.split('\n');
+        for (const line of envLines) {
+          const trimmed = line.trim();
+          if (trimmed && trimmed.includes('=')) {
+            const [key, ...valueParts] = trimmed.split('=');
+            const value = valueParts.join('=');
+            environmentVariables[key.trim()] = value.trim();
+          }
+        }
+      } catch (error) {
+        toast.error('Invalid environment variables format. Use KEY=VALUE format.');
+        return;
+      }
+    }
+
     createMutation.mutate({
       name: formData.name,
       command: formData.command,
       description: formData.description || undefined,
       allowedDirectories: directories.length > 0 ? directories : undefined,
+      environmentVariables: Object.keys(environmentVariables).length > 0 ? environmentVariables : undefined,
     });
   };
 
   const handleEdit = (server: McpServer) => {
     setEditingServer(server);
+    
+    // Convert environment variables object to KEY=VALUE format
+    let envVarsString = '';
+    if (server.environmentVariables) {
+      envVarsString = Object.entries(server.environmentVariables)
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n');
+    }
+    
     setFormData({
       name: server.name,
       command: server.command,
       description: server.description || '',
       allowedDirectories: server.allowedDirectories?.join(', ') || '',
+      environmentVariables: envVarsString,
     });
     setShowEditForm(true);
   };
@@ -130,12 +166,32 @@ const McpServers: React.FC = () => {
       .map((d) => d.trim())
       .filter((d) => d);
 
+    let environmentVariables: Record<string, string> = {};
+    if (formData.environmentVariables.trim()) {
+      try {
+        // Parse environment variables from KEY=VALUE format
+        const envLines = formData.environmentVariables.split('\n');
+        for (const line of envLines) {
+          const trimmed = line.trim();
+          if (trimmed && trimmed.includes('=')) {
+            const [key, ...valueParts] = trimmed.split('=');
+            const value = valueParts.join('=');
+            environmentVariables[key.trim()] = value.trim();
+          }
+        }
+      } catch (error) {
+        toast.error('Invalid environment variables format. Use KEY=VALUE format.');
+        return;
+      }
+    }
+
     updateMutation.mutate({
       id: editingServer.id,
       name: formData.name,
       command: formData.command,
       description: formData.description || null,
       allowedDirectories: directories.length > 0 ? directories : null,
+      environmentVariables: Object.keys(environmentVariables).length > 0 ? environmentVariables : {},
     });
   };
 
@@ -149,6 +205,52 @@ const McpServers: React.FC = () => {
       toast.error(error.response?.data?.error || 'Failed to discover tools');
     } finally {
       setDiscovering(false);
+    }
+  };
+
+  const handleViewAvailableTools = async (server: McpServer) => {
+    setLoadingTools(true);
+    try {
+      const response = await adminApi.getTools();
+      const serverTools = response.data.filter((tool: any) => tool.mcpServerId === server.id);
+      setAvailableTools(serverTools);
+      setShowAvailableTools(true);
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to load available tools');
+    } finally {
+      setLoadingTools(false);
+    }
+  };
+
+  const handleAuthenticate = async (server: McpServer) => {
+    try {
+      // First check if authentication is needed
+      const checkResponse = await adminApi.checkMcpAuth(server.id);
+      const authResult = checkResponse.data;
+      
+      if (authResult.needsAuth) {
+        // Authentication is needed, get the auth URL
+        const authUrlResponse = await adminApi.getMcpAuthUrl(server.id);
+        const authUrl = authUrlResponse.data.authUrl;
+        
+        if (authUrl) {
+          // Show the auth URL to the user
+          const userWantsToAuth = window.confirm(
+            `${authResult.message}\n\nClick OK to open the authentication page in a new tab.`
+          );
+          
+          if (userWantsToAuth) {
+            window.open(authUrl, '_blank');
+            toast.success('Authentication page opened. Please complete the OAuth flow and then try syncing tools again.');
+          }
+        } else {
+          toast.error('Failed to get authentication URL');
+        }
+      } else {
+        toast.success('Server is already authenticated');
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to check authentication');
     }
   };
 
@@ -225,6 +327,18 @@ const McpServers: React.FC = () => {
                   />
                 </TextField.Root>
               </div>
+              <div>
+                <Text size="2" mb="1">Environment Variables (optional)</Text>
+                <TextArea
+                  placeholder="GOOGLE_OAUTH_CLIENT_ID=your_client_id&#10;GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret&#10;GOOGLE_OAUTH_REDIRECT_URI=https://your-domain.com/oauth2callback&#10;PORT=8000&#10;WORKSPACE_MCP_PORT=8000"
+                  value={formData.environmentVariables}
+                  onChange={(e) => setFormData({ ...formData, environmentVariables: e.target.value })}
+                  rows={5}
+                />
+                <Text size="1" color="gray" mt="1">
+                  One environment variable per line in KEY=VALUE format. For Google workspace MCP, set GOOGLE_OAUTH_REDIRECT_URI to your domain's callback URL.
+                </Text>
+              </div>
             </Flex>
             <Flex gap="3" mt="4" justify="end">
               <Dialog.Close>
@@ -280,6 +394,18 @@ const McpServers: React.FC = () => {
                   />
                 </TextField.Root>
               </div>
+              <div>
+                <Text size="2" mb="1">Environment Variables</Text>
+                <TextArea
+                  placeholder="GOOGLE_OAUTH_CLIENT_ID=your_client_id&#10;GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret&#10;GOOGLE_OAUTH_REDIRECT_URI=https://your-domain.com/oauth2callback&#10;PORT=8000&#10;WORKSPACE_MCP_PORT=8000"
+                  value={formData.environmentVariables}
+                  onChange={(e) => setFormData({ ...formData, environmentVariables: e.target.value })}
+                  rows={5}
+                />
+                <Text size="1" color="gray" mt="1">
+                  One environment variable per line in KEY=VALUE format. For Google workspace MCP, set GOOGLE_OAUTH_REDIRECT_URI to your domain's callback URL.
+                </Text>
+              </div>
             </Flex>
             <Flex gap="3" mt="4" justify="end">
               <Dialog.Close>
@@ -304,14 +430,81 @@ const McpServers: React.FC = () => {
               Tools available from this MCP server
             </Dialog.Description>
             <Box mt="4" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-              {discoveredTools.map((tool, index) => (
-                <Card key={index} mb="2" style={{ padding: '12px' }}>
-                  <Text weight="bold" size="3">{tool.name}</Text>
-                  <Text size="2" color="gray" style={{ display: 'block', marginTop: '4px' }}>
-                    {tool.description}
+              {discoveredTools.length === 0 ? (
+                <Card style={{ padding: '12px', textAlign: 'center' }}>
+                  <Text size="2" color="gray">
+                    No tools discovered. This may be because:
+                  </Text>
+                  <Text size="1" color="gray" style={{ display: 'block', marginTop: '8px' }}>
+                    • The MCP server needs authentication
+                  </Text>
+                  <Text size="1" color="gray" style={{ display: 'block' }}>
+                    • The server is not responding correctly
+                  </Text>
+                  <Text size="1" color="gray" style={{ display: 'block' }}>
+                    • No tools are available from this server
                   </Text>
                 </Card>
-              ))}
+              ) : (
+                discoveredTools.map((tool, index) => (
+                  <Card key={index} mb="2" style={{ padding: '12px' }}>
+                    <Text weight="bold" size="3">{tool.name}</Text>
+                    <Text size="2" color="gray" style={{ display: 'block', marginTop: '4px' }}>
+                      {tool.description}
+                    </Text>
+                    {tool.inputSchema && (
+                      <Text size="1" color="gray" style={{ display: 'block', marginTop: '4px' }}>
+                        Parameters: {Object.keys(tool.inputSchema.properties || {}).join(', ')}
+                      </Text>
+                    )}
+                  </Card>
+                ))
+              )}
+            </Box>
+            <Flex gap="3" mt="4" justify="end">
+              <Dialog.Close>
+                <Button variant="soft">
+                  Close
+                </Button>
+              </Dialog.Close>
+            </Flex>
+          </Dialog.Content>
+        </Dialog.Root>
+
+        <Dialog.Root open={showAvailableTools} onOpenChange={setShowAvailableTools}>
+          <Dialog.Content style={{ maxWidth: 600 }}>
+            <Dialog.Title>Available Tools</Dialog.Title>
+            <Dialog.Description>
+              Tools currently synced from this MCP server
+            </Dialog.Description>
+            <Box mt="4" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              {availableTools.length === 0 ? (
+                <Card style={{ padding: '12px', textAlign: 'center' }}>
+                  <Text size="2" color="gray">
+                    No tools are currently synced from this server.
+                  </Text>
+                  <Text size="1" color="gray" style={{ display: 'block', marginTop: '8px' }}>
+                    Try clicking "Sync" to sync tools from the server.
+                  </Text>
+                </Card>
+              ) : (
+                availableTools.map((tool, index) => (
+                  <Card key={index} mb="2" style={{ padding: '12px' }}>
+                    <Flex justify="between" align="center">
+                      <Text weight="bold" size="3">{tool.name}</Text>
+                      <Badge color={tool.active ? 'green' : 'gray'}>
+                        {tool.active ? 'Active' : 'Inactive'}
+                      </Badge>
+                    </Flex>
+                    <Text size="2" color="gray" style={{ display: 'block', marginTop: '4px' }}>
+                      {tool.description}
+                    </Text>
+                    <Text size="1" color="gray" style={{ display: 'block', marginTop: '4px' }}>
+                      Type: {tool.type} | Source: {tool.sourceType}
+                    </Text>
+                  </Card>
+                ))
+              )}
             </Box>
             <Flex gap="3" mt="4" justify="end">
               <Dialog.Close>
@@ -373,6 +566,17 @@ const McpServers: React.FC = () => {
                     </Table.Cell>
                     <Table.Cell className="actions-cell">
                       <Flex gap="2">
+                        {server.command.includes('workspace-mcp') && (
+                          <Button
+                            size="1"
+                            variant="ghost"
+                            onClick={() => handleAuthenticate(server)}
+                            color="blue"
+                          >
+                            <Key size={14} />
+                            <span className="button-text">Auth</span>
+                          </Button>
+                        )}
                         <Button
                           size="1"
                           variant="ghost"
@@ -381,6 +585,15 @@ const McpServers: React.FC = () => {
                         >
                           <Eye size={14} />
                           <span className="button-text">Discover</span>
+                        </Button>
+                        <Button
+                          size="1"
+                          variant="ghost"
+                          onClick={() => handleViewAvailableTools(server)}
+                          disabled={loadingTools}
+                        >
+                          <Server size={14} />
+                          <span className="button-text">Available</span>
                         </Button>
                         <Button
                           size="1"
@@ -464,6 +677,17 @@ const McpServers: React.FC = () => {
                   </div>
                   
                   <div className="mobile-actions-section">
+                    {server.command.includes('workspace-mcp') && (
+                      <Button
+                        size="1"
+                        variant="outline"
+                        onClick={() => handleAuthenticate(server)}
+                        color="blue"
+                      >
+                        <Key size={14} />
+                        Auth
+                      </Button>
+                    )}
                     <Button
                       size="1"
                       variant="outline"
@@ -472,6 +696,15 @@ const McpServers: React.FC = () => {
                     >
                       <Eye size={14} />
                       Discover
+                    </Button>
+                    <Button
+                      size="1"
+                      variant="outline"
+                      onClick={() => handleViewAvailableTools(server)}
+                      disabled={loadingTools}
+                    >
+                      <Server size={14} />
+                      Available
                     </Button>
                     <Button
                       size="1"

@@ -256,19 +256,19 @@ router.get('/conversations', authenticateAdmin, async (req, res) => {
       let paramIndex = 1;
       
       if (apiKeyId) {
-        conditions.push(`c.api_key_id = $${paramIndex}`);
+        conditions.push(`c.api_key_id = ${paramIndex}`);
         params.push(parseInt(apiKeyId as string));
         paramIndex++;
       }
       
       if (startDate) {
-        conditions.push(`c.started_at >= $${paramIndex}`);
+        conditions.push(`c.started_at >= ${paramIndex}`);
         params.push(new Date(startDate as string));
         paramIndex++;
       }
       
       if (endDate) {
-        conditions.push(`c.started_at <= $${paramIndex}`);
+        conditions.push(`c.started_at <= ${paramIndex}`);
         params.push(new Date(endDate as string));
         paramIndex++;
       }
@@ -620,7 +620,7 @@ router.get('/mcp-servers', authenticateAdmin, async (req, res) => {
 
 router.post('/mcp-servers', authenticateAdmin, async (req, res) => {
   try {
-    const { name, command, description, allowedDirectories } = req.body;
+    const { name, command, description, allowedDirectories, environmentVariables } = req.body;
 
     if (!name || !command) {
       return res.status(400).json({ error: 'Name and command are required' });
@@ -631,6 +631,7 @@ router.post('/mcp-servers', authenticateAdmin, async (req, res) => {
       command,
       description,
       allowedDirectories: allowedDirectories || [],
+      environmentVariables: environmentVariables || {},
     });
 
     res.json(newServer);
@@ -643,13 +644,14 @@ router.post('/mcp-servers', authenticateAdmin, async (req, res) => {
 router.patch('/mcp-servers/:id', authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, command, description, allowedDirectories, active } = req.body;
+    const { name, command, description, allowedDirectories, environmentVariables, active } = req.body;
 
     await mcpService.updateServer(parseInt(id), {
       ...(name !== undefined && { name }),
       ...(command !== undefined && { command }),
       ...(description !== undefined && { description }),
       ...(allowedDirectories !== undefined && { allowedDirectories }),
+      ...(environmentVariables !== undefined && { environmentVariables }),
       ...(active !== undefined && { active }),
     });
 
@@ -687,7 +689,7 @@ router.post('/mcp-servers/:id/discover-tools', authenticateAdmin, async (req, re
     }
 
     // Discover tools from the server
-    const discoveredTools = await mcpService.discoverTools(server.command);
+    const discoveredTools = await mcpService.discoverTools(server.command, server.environmentVariables as Record<string, string>);
     res.json(discoveredTools);
   } catch (error) {
     console.error('Error discovering MCP tools:', error);
@@ -713,5 +715,55 @@ router.post('/mcp-servers/:id/sync-tools', authenticateAdmin, async (req, res) =
     res.status(500).json({ error: `Failed to sync tools: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
 });
+
+router.post('/mcp-servers/:id/get-auth-url', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get server details
+    const [server] = await db
+      .select()
+      .from(mcpServers)
+      .where(eq(mcpServers.id, parseInt(id)))
+      .limit(1);
+
+    if (!server) {
+      return res.status(404).json({ error: 'MCP server not found' });
+    }
+
+    // Get the auth URL
+    const authUrl = await mcpService.getAuthUrl(server.command, server.environmentVariables as Record<string, string>);
+    res.json({ authUrl });
+  } catch (error) {
+    console.error('Error getting MCP auth URL:', error);
+    res.status(500).json({ error: `Failed to get auth URL: ${error instanceof Error ? error.message : 'Unknown error'}` });
+  }
+});
+
+router.post('/mcp-servers/:id/check-auth', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get server details
+    const [server] = await db
+      .select()
+      .from(mcpServers)
+      .where(eq(mcpServers.id, parseInt(id)))
+      .limit(1);
+
+    if (!server) {
+      return res.status(404).json({ error: 'MCP server not found' });
+    }
+
+    // Check authentication status
+    const hostHeader = req.get('host');
+    const authResult = await mcpService.checkAuthentication(server.command, server.environmentVariables as Record<string, string>, hostHeader);
+    res.json(authResult);
+  } catch (error) {
+    console.error('Error checking MCP authentication:', error);
+    res.status(500).json({ error: `Failed to check authentication: ${error instanceof Error ? error.message : 'Unknown error'}` });
+  }
+});
+
 
 export default router;

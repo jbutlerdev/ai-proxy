@@ -544,42 +544,103 @@ export class ProxyHandler {
     // Execute proxy tools
     const toolResults: ChatMessage[] = [];
     for (const toolCall of proxyToolCalls) {
-      const args = JSON.parse(toolCall.function.arguments);
-      const result = await this.toolService.executeTool(
-        toolCall.function.name,
-        args,
-        apiKeyId
-      );
+      try {
+        const args = JSON.parse(toolCall.function.arguments);
+        const result = await this.toolService.executeTool(
+          toolCall.function.name,
+          args,
+          apiKeyId
+        );
 
-      const toolResult: ChatMessage = {
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        content: JSON.stringify(result.success ? result.result : { error: result.error }),
-      };
-
-      toolResults.push(toolResult);
-
-      // Log the tool result if we have a conversation ID
-      if (conversationId) {
-        await db.insert(messages).values({
-          conversationId,
-          role: 'tool',
-          content: this.serializeContent(toolResult.content),
-          toolCallId: toolCall.id,
-          name: toolCall.function.name,
-          requestTokens: 0,
-          responseTokens: 0,
+        // Debug log the tool result
+        console.log(`Tool ${toolCall.function.name} result:`, {
+          success: result.success,
+          hasResult: result.result !== undefined,
+          resultType: typeof result.result,
+          resultLength: typeof result.result === 'string' ? result.result.length : 
+                       Array.isArray(result.result) ? result.result.length : 
+                       result.result && typeof result.result === 'object' ? Object.keys(result.result).length : 0
         });
+
+        // Ensure tool result has valid content
+        let toolContent: string;
+        if (result.success) {
+          // Always stringify the actual result, even if it's null or undefined
+          toolContent = JSON.stringify(result.result);
+        } else {
+          toolContent = JSON.stringify({ error: result.error || 'Tool execution failed' });
+        }
+        
+        // Only replace if stringification produced an empty string (which shouldn't happen)
+        if (!toolContent || toolContent === '') {
+          toolContent = JSON.stringify({ message: 'Tool completed with no output' });
+        }
+        
+        const toolResult: ChatMessage = {
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: toolContent,
+        };
+
+        toolResults.push(toolResult);
+        
+        // Log the tool result if we have a conversation ID
+        if (conversationId) {
+          await db.insert(messages).values({
+            conversationId,
+            role: 'tool',
+            content: this.serializeContent(toolResult.content),
+            toolCallId: toolCall.id,
+            name: toolCall.function.name,
+            requestTokens: 0,
+            responseTokens: 0,
+          });
+        }
+      } catch (error) {
+        console.error(`Error executing tool ${toolCall.function.name}:`, error);
+        
+        // Add error result for this tool call
+        const errorContent = JSON.stringify({ 
+          error: `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+        });
+        
+        const errorResult: ChatMessage = {
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: errorContent || JSON.stringify({ error: 'Tool execution failed' }),
+        };
+        
+        toolResults.push(errorResult);
+        
+        // Log the error result if we have a conversation ID
+        if (conversationId) {
+          await db.insert(messages).values({
+            conversationId,
+            role: 'tool',
+            content: this.serializeContent(errorResult.content),
+            toolCallId: toolCall.id,
+            name: toolCall.function.name,
+            requestTokens: 0,
+            responseTokens: 0,
+          });
+        }
       }
     }
 
     // Continue the conversation with tool results
+    const assistantMessage = response.choices[0].message!;
+    
+    // Ensure the assistant message has content - OpenAI API requires it
+    if (!assistantMessage.content) {
+      assistantMessage.content = '';
+    }
+    
     const continuationRequest: ChatCompletionRequest = {
       ...request,
       stream: false, // Force non-streaming for tool continuation
       messages: [
         ...request.messages,
-        response.choices[0].message!,
+        assistantMessage,
         ...toolResults,
       ],
     };
@@ -597,7 +658,27 @@ export class ProxyHandler {
       ) as ChatCompletionResponse;
     } catch (error) {
       console.error('Error in continuation request:', error);
-      throw error;
+      console.error('Continuation request messages:', continuationRequest.messages.map(m => ({
+        role: m.role,
+        hasContent: !!m.content,
+        contentLength: m.content?.length || 0,
+        hasToolCalls: !!(m as any).tool_calls,
+        toolCallId: (m as any).tool_call_id
+      })));
+      
+      // Return a graceful error response instead of throwing
+      return {
+        ...response,
+        choices: [{
+          ...response.choices[0],
+          message: {
+            role: 'assistant',
+            content: 'I encountered an error while processing the tool results. Please try again.',
+            tool_calls: undefined
+          },
+          finish_reason: 'stop'
+        }]
+      };
     }
 
     console.log('Continuation response:', {

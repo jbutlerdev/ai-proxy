@@ -64,10 +64,12 @@ export const adminApi = {
 
   // MCP Servers
   getMcpServers: () => api.get('/mcp-servers'),
-  createMcpServer: (data: { name: string; command: string; description?: string; allowedDirectories?: string[] }) =>
+  createMcpServer: (data: { name: string; command: string; description?: string; allowedDirectories?: string[]; environmentVariables?: Record<string, string> }) =>
     api.post('/mcp-servers', data),
   updateMcpServer: (id: number, data: any) => api.patch(`/mcp-servers/${id}`, data),
   deleteMcpServer: (id: number) => api.delete(`/mcp-servers/${id}`),
   discoverMcpTools: (id: number) => api.post(`/mcp-servers/${id}/discover-tools`),
   syncMcpTools: (id: number) => api.post(`/mcp-servers/${id}/sync-tools`),
+  checkMcpAuth: (id: number) => api.post(`/mcp-servers/${id}/check-auth`),
+  getMcpAuthUrl: (id: number) => api.post(`/mcp-servers/${id}/get-auth-url`),
 };

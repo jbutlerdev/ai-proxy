@@ -56,35 +56,26 @@ export class OpenAIClient {
         stream: true,
       });
 
+      // Get the iterator once and reuse it
+      const streamIterator = stream[Symbol.asyncIterator]();
+      
       // Convert the async iterator to a readable stream
       const readable = new Readable({
         async read() {
           try {
-            const { value, done } = await stream[Symbol.asyncIterator]().next();
+            const { value, done } = await streamIterator.next();
             if (done) {
+              this.push(`data: [DONE]\n\n`);
               this.push(null);
             } else {
-              // Handle reasoning content in streaming responses
-              const processedChoices = value.choices.map((choice: any) => {
-                if (choice.delta?.reasoning_content && !choice.delta.content) {
-                  return {
-                    ...choice,
-                    delta: {
-                      ...choice.delta,
-                      content: choice.delta.reasoning_content,
-                    }
-                  };
-                }
-                return choice;
-              });
-
+              // Pass through the chunk exactly as received from upstream
               const chunk: StreamChunk = {
                 id: value.id,
                 object: 'chat.completion.chunk',
                 created: value.created,
                 model: value.model,
                 system_fingerprint: value.system_fingerprint,
-                choices: processedChoices as any,
+                choices: value.choices as any,
               };
               this.push(`data: ${JSON.stringify(chunk)}\n\n`);
             }
@@ -106,15 +97,16 @@ export class OpenAIClient {
       // Handle reasoning content from models like qwen3
       const processedChoices = response.choices.map((choice: any) => {
         if (choice.message?.reasoning_content) {
-          // Preserve both reasoning and content for proper display
+          // Format reasoning content with think tags for LibreChat
+          const thinkContent = `<think>\n${choice.message.reasoning_content}\n</think>`;
           return {
             ...choice,
             message: {
               ...choice.message,
               // Keep reasoning_content for collapsible display
               reasoning_content: choice.message.reasoning_content,
-              // If no content but we have reasoning, use reasoning as fallback
-              content: choice.message.content || choice.message.reasoning_content,
+              // If no content but we have reasoning, use formatted reasoning
+              content: choice.message.content || thinkContent,
             }
           };
         }

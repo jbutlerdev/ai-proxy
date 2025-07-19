@@ -94,11 +94,34 @@ router.patch('/api-keys/:id', authenticateAdmin, async (req, res) => {
 router.get('/tools', authenticateAdmin, async (req, res) => {
   try {
     const allTools = await db
-      .select()
+      .select({
+        id: tools.id,
+        name: tools.name,
+        description: tools.description,
+        type: tools.type,
+        sourceType: tools.sourceType,
+        parameters: tools.parameters,
+        implementation: tools.implementation,
+        mcpServerCommand: tools.mcpServerCommand,
+        mcpServerId: tools.mcpServerId,
+        active: tools.active,
+        createdAt: tools.createdAt,
+        updatedAt: tools.updatedAt,
+        // Include MCP server active status
+        mcpServerActive: mcpServers.active,
+      })
       .from(tools)
+      .leftJoin(mcpServers, eq(tools.mcpServerId, mcpServers.id))
       .orderBy(desc(tools.createdAt));
 
-    res.json(allTools);
+    // Map the results to include a computed active field that considers MCP server status
+    const toolsWithComputedActive = allTools.map(tool => ({
+      ...tool,
+      // A tool is only active if it's active AND (if it's an MCP tool, its server is also active)
+      active: tool.active && (tool.mcpServerId === null || tool.mcpServerActive === true)
+    }));
+
+    res.json(toolsWithComputedActive);
   } catch (error) {
     console.error('Error fetching tools:', error);
     res.status(500).json({ error: 'Failed to fetch tools' });
@@ -224,25 +247,56 @@ router.get('/conversations', authenticateAdmin, async (req, res) => {
       whereConditions.push(lte(conversations.startedAt, new Date(endDate as string)));
     }
 
-    const baseQuery = db
-      .select({
-        id: conversations.id,
-        apiKeyId: conversations.apiKeyId,
-        apiKeyName: apiKeys.name,
-        model: conversations.model,
-        startedAt: conversations.startedAt,
-        endedAt: conversations.endedAt,
-        totalTokensUsed: conversations.totalTokensUsed,
-        totalCost: conversations.totalCost,
-      })
-      .from(conversations)
-      .innerJoin(apiKeys, eq(apiKeys.id, conversations.apiKeyId));
+    // Build WHERE clause for SQL query
+    let whereClause = '';
+    let params: any[] = [];
+    
+    if (whereConditions.length > 0) {
+      const conditions = [];
+      let paramIndex = 1;
+      
+      if (apiKeyId) {
+        conditions.push(`c.api_key_id = ${paramIndex}`);
+        params.push(parseInt(apiKeyId as string));
+        paramIndex++;
+      }
+      
+      if (startDate) {
+        conditions.push(`c.started_at >= ${paramIndex}`);
+        params.push(new Date(startDate as string));
+        paramIndex++;
+      }
+      
+      if (endDate) {
+        conditions.push(`c.started_at <= ${paramIndex}`);
+        params.push(new Date(endDate as string));
+        paramIndex++;
+      }
+      
+      whereClause = 'WHERE ' + conditions.join(' AND ');
+    }
 
-    const results = whereConditions.length > 0
-      ? await baseQuery.where(and(...whereConditions)).orderBy(desc(conversations.startedAt)).limit(100)
-      : await baseQuery.orderBy(desc(conversations.startedAt)).limit(100);
+    // Calculate correct total tokens using SQL
+    const conversationsWithCorrectTotals = await db.execute(sql`
+      SELECT 
+        c.id,
+        c.api_key_id as "apiKeyId",
+        ak.name as "apiKeyName",
+        c.model,
+        c.started_at as "startedAt",
+        c.ended_at as "endedAt",
+        c.total_cost as "totalCost",
+        (COALESCE(SUM(m.request_tokens), 0) + COALESCE(SUM(m.response_tokens), 0) + COALESCE(SUM(m.reasoning_tokens), 0))::INTEGER as "totalTokensUsed"
+      FROM conversations c
+      INNER JOIN api_keys ak ON c.api_key_id = ak.id
+      LEFT JOIN messages m ON c.id = m.conversation_id
+      ${whereClause ? sql.raw(whereClause) : sql``}
+      GROUP BY c.id, c.api_key_id, ak.name, c.model, c.started_at, c.ended_at, c.total_cost
+      ORDER BY c.started_at DESC
+      LIMIT 100
+    `);
 
-    res.json(results);
+    res.json(conversationsWithCorrectTotals.rows);
   } catch (error) {
     console.error('Error fetching conversations:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
@@ -566,7 +620,7 @@ router.get('/mcp-servers', authenticateAdmin, async (req, res) => {
 
 router.post('/mcp-servers', authenticateAdmin, async (req, res) => {
   try {
-    const { name, command, description, allowedDirectories } = req.body;
+    const { name, command, description, allowedDirectories, environmentVariables } = req.body;
 
     if (!name || !command) {
       return res.status(400).json({ error: 'Name and command are required' });
@@ -577,6 +631,7 @@ router.post('/mcp-servers', authenticateAdmin, async (req, res) => {
       command,
       description,
       allowedDirectories: allowedDirectories || [],
+      environmentVariables: environmentVariables || {},
     });
 
     res.json(newServer);
@@ -589,13 +644,14 @@ router.post('/mcp-servers', authenticateAdmin, async (req, res) => {
 router.patch('/mcp-servers/:id', authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, command, description, allowedDirectories, active } = req.body;
+    const { name, command, description, allowedDirectories, environmentVariables, active } = req.body;
 
     await mcpService.updateServer(parseInt(id), {
       ...(name !== undefined && { name }),
       ...(command !== undefined && { command }),
       ...(description !== undefined && { description }),
       ...(allowedDirectories !== undefined && { allowedDirectories }),
+      ...(environmentVariables !== undefined && { environmentVariables }),
       ...(active !== undefined && { active }),
     });
 
@@ -633,7 +689,7 @@ router.post('/mcp-servers/:id/discover-tools', authenticateAdmin, async (req, re
     }
 
     // Discover tools from the server
-    const discoveredTools = await mcpService.discoverTools(server.command);
+    const discoveredTools = await mcpService.discoverTools(server.command, server.environmentVariables as Record<string, string>);
     res.json(discoveredTools);
   } catch (error) {
     console.error('Error discovering MCP tools:', error);
@@ -659,5 +715,55 @@ router.post('/mcp-servers/:id/sync-tools', authenticateAdmin, async (req, res) =
     res.status(500).json({ error: `Failed to sync tools: ${error instanceof Error ? error.message : 'Unknown error'}` });
   }
 });
+
+router.post('/mcp-servers/:id/get-auth-url', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get server details
+    const [server] = await db
+      .select()
+      .from(mcpServers)
+      .where(eq(mcpServers.id, parseInt(id)))
+      .limit(1);
+
+    if (!server) {
+      return res.status(404).json({ error: 'MCP server not found' });
+    }
+
+    // Get the auth URL
+    const authUrl = await mcpService.getAuthUrl(server.command, server.environmentVariables as Record<string, string>);
+    res.json({ authUrl });
+  } catch (error) {
+    console.error('Error getting MCP auth URL:', error);
+    res.status(500).json({ error: `Failed to get auth URL: ${error instanceof Error ? error.message : 'Unknown error'}` });
+  }
+});
+
+router.post('/mcp-servers/:id/check-auth', authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get server details
+    const [server] = await db
+      .select()
+      .from(mcpServers)
+      .where(eq(mcpServers.id, parseInt(id)))
+      .limit(1);
+
+    if (!server) {
+      return res.status(404).json({ error: 'MCP server not found' });
+    }
+
+    // Check authentication status
+    const hostHeader = req.get('host');
+    const authResult = await mcpService.checkAuthentication(server.command, server.environmentVariables as Record<string, string>, hostHeader);
+    res.json(authResult);
+  } catch (error) {
+    console.error('Error checking MCP authentication:', error);
+    res.status(500).json({ error: `Failed to check authentication: ${error instanceof Error ? error.message : 'Unknown error'}` });
+  }
+});
+
 
 export default router;

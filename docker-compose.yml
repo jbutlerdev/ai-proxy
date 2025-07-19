@@ -27,18 +27,20 @@ services:
       DATABASE_NAME: openai_proxy
       DATABASE_USER: postgres
       DATABASE_PASSWORD: password
-      PORT: 3000
+      APP_PORT: 3002
       JWT_SECRET: your-super-secret-jwt-key-change-this-in-production
       ADMIN_PASSWORD: admin123
     ports:
-      - "3000:3000"
+      - "3000:3002"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # For potential Docker-based MCP servers
+      - mcp_credentials:/home/openai-proxy/.google_workspace_mcp  # Persist MCP credentials
     restart: unless-stopped
     command: sh -c "npm run migrate && npm start"
 
 volumes:
   postgres_data:
+  mcp_credentials:

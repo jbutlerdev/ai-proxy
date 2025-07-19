@@ -95,6 +95,20 @@ const ConversationDetail: React.FC = () => {
     const isTool = message.role === 'tool';
     const isSystem = message.role === 'system';
 
+    // Debug logging for messages without content
+    if ((message.content === null || message.content === undefined || message.content === '') && 
+        (isAssistant || isTool)) {
+      console.log('Message without content:', {
+        id: message.id,
+        role: message.role,
+        name: message.name,
+        toolCalls: message.toolCalls,
+        functionCall: message.functionCall,
+        metadata: message.metadata,
+        fullMessage: message
+      });
+    }
+
     return (
       <Card key={message.id} className="message-card">
         <Flex direction="column" gap="3">
@@ -123,9 +137,21 @@ const ConversationDetail: React.FC = () => {
                 </Badge>
               )}
               
-              {message.latencyMs && (
+              {message.reasoningTokens > 0 && (
+                <Badge color="purple" size="1">
+                  {message.reasoningTokens} thinking
+                </Badge>
+              )}
+              
+              {message.latencyMs !== null && message.latencyMs !== undefined && message.latencyMs > 0 && (
                 <Badge color="orange" size="1">
                   {message.latencyMs}ms
+                </Badge>
+              )}
+              
+              {message.timeToFirstTokenMs !== null && message.timeToFirstTokenMs !== undefined && (
+                <Badge color="cyan" size="1">
+                  TTFT: {message.timeToFirstTokenMs}ms
                 </Badge>
               )}
             </div>
@@ -191,7 +217,7 @@ const ConversationDetail: React.FC = () => {
           )}
 
           {/* Main Response Content */}
-          {message.content && (
+          {(message.content !== null && message.content !== undefined && message.content !== '') && (
             <Box
               style={{
                 background: isSystem ? 'rgba(156, 163, 175, 0.1)' : 'rgba(255, 255, 255, 0.02)',
@@ -212,6 +238,27 @@ const ConversationDetail: React.FC = () => {
                   renderContent(message.content)
                 )}
               </div>
+            </Box>
+          )}
+
+          {/* Show placeholder for messages without content */}
+          {(message.content === null || message.content === undefined || message.content === '') && 
+           !message.toolCalls?.length && 
+           !message.functionCall && 
+           (isAssistant || isTool) && (
+            <Box
+              style={{
+                background: 'rgba(255, 255, 255, 0.02)',
+                padding: '12px',
+                borderRadius: '8px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                fontStyle: 'italic',
+                color: '#9ca3af',
+              }}
+            >
+              <Text size="2">
+                [No content in response]
+              </Text>
             </Box>
           )}
 
@@ -259,6 +306,26 @@ const ConversationDetail: React.FC = () => {
               </Text>
             </Box>
           )}
+
+          {/* Display any additional metadata that might contain response data */}
+          {message.metadata && Object.keys(message.metadata).length > 0 && !message.metadata.reasoning_content && (
+            <Box
+              style={{
+                background: 'rgba(156, 163, 175, 0.05)',
+                padding: '12px',
+                borderRadius: '8px',
+                border: '1px solid rgba(156, 163, 175, 0.2)',
+                marginTop: '8px',
+              }}
+            >
+              <Text size="1" weight="medium" style={{ color: '#9ca3af', marginBottom: '8px', display: 'block' }}>
+                Additional Metadata:
+              </Text>
+              <Text size="1" style={{ fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>
+                {JSON.stringify(message.metadata, null, 2)}
+              </Text>
+            </Box>
+          )}
         </Flex>
       </Card>
     );
@@ -297,7 +364,7 @@ const ConversationDetail: React.FC = () => {
             
             <Separator />
             
-            <Flex gap="4" wrap="wrap" className="conversation-metadata">
+            <Flex gap="4" wrap="wrap" className="conversation-metadata" style={{ alignItems: 'flex-start' }}>
               <Flex gap="2" align="center">
                 <Text size="2" color="gray">API:</Text>
                 <Text size="2">{conversation.apiKeyName}</Text>
@@ -306,10 +373,70 @@ const ConversationDetail: React.FC = () => {
                 <Text size="2" color="gray">Model:</Text>
                 <Badge color="blue">{conversation.model}</Badge>
               </Flex>
-              <Flex gap="2" align="center">
-                <Text size="2" color="gray">Tokens:</Text>
-                <Text size="2">{conversation.totalTokensUsed.toLocaleString()}</Text>
-              </Flex>
+              
+              {conversation.messages && (
+                <Flex gap="2" align="center">
+                  <Text size="2" color="gray">Prompt:</Text>
+                  <Text size="2">
+                    {conversation.messages
+                      .reduce((sum: number, msg: any) => sum + (msg.requestTokens || 0), 0)
+                      .toLocaleString()}
+                  </Text>
+                </Flex>
+              )}
+              
+              {conversation.messages && (
+                <Flex gap="2" align="center">
+                  <Text size="2" color="gray">Response:</Text>
+                  <Text size="2">
+                    {conversation.messages
+                      .reduce((sum: number, msg: any) => sum + (msg.responseTokens || 0), 0)
+                      .toLocaleString()}
+                  </Text>
+                </Flex>
+              )}
+              
+              {conversation.messages && (
+                <Flex gap="2" align="center">
+                  <Text size="2" color="gray">Thinking:</Text>
+                  <Text size="2">
+                    {conversation.messages
+                      .reduce((sum: number, msg: any) => sum + (msg.reasoningTokens || 0), 0)
+                      .toLocaleString()}
+                  </Text>
+                </Flex>
+              )}
+              
+              {conversation.messages && (
+                <Flex gap="2" align="center">
+                  <Text size="2" color="gray">Total:</Text>
+                  <Text size="2">
+                    {(conversation.messages
+                      .reduce((sum: number, msg: any) => sum + (msg.requestTokens || 0), 0) +
+                    conversation.messages
+                      .reduce((sum: number, msg: any) => sum + (msg.responseTokens || 0), 0) +
+                    conversation.messages
+                      .reduce((sum: number, msg: any) => sum + (msg.reasoningTokens || 0), 0)
+                    ).toLocaleString()}
+                  </Text>
+                </Flex>
+              )}
+              
+              {conversation.messages && (
+                <Flex gap="2" align="center">
+                  <Text size="2" color="gray">Avg Response:</Text>
+                  <Text size="2">
+                    {(() => {
+                      const responseTimes = conversation.messages
+                        .filter((msg: any) => msg.latencyMs !== null && msg.latencyMs !== undefined)
+                        .map((msg: any) => msg.latencyMs);
+                      return responseTimes.length > 0 
+                        ? Math.round(responseTimes.reduce((sum: number, time: number) => sum + time, 0) / responseTimes.length) + 'ms'
+                        : 'N/A';
+                    })()}
+                  </Text>
+                </Flex>
+              )}
               <Flex gap="2" align="center">
                 <Text size="2" color="gray">Started:</Text>
                 <Text size="2">{new Date(conversation.startedAt).toLocaleString()}</Text>
@@ -331,7 +458,7 @@ const ConversationDetail: React.FC = () => {
         </Card>
 
         <Box className="messages-section">
-          <Flex justify="between" align="center" mb="4">
+          <Flex justify="between" align="center" mb="4" className="messages-header">
             <Text size="4" weight="bold">
               Messages ({conversation.messages?.length || 0})
             </Text>
@@ -339,14 +466,16 @@ const ConversationDetail: React.FC = () => {
               variant="ghost"
               size="2"
               onClick={() => setMarkdownEnabled(!markdownEnabled)}
+              className="markdown-toggle-btn"
               style={{
                 color: '#9ca3af',
-                fontSize: '14px'
+                fontSize: '14px',
+                flexShrink: 0
               }}
             >
               <Flex align="center" gap="2">
                 {markdownEnabled ? <Eye size={16} /> : <FileText size={16} />}
-                <Text size="2">
+                <Text size="2" className="button-text">
                   {markdownEnabled ? 'Raw Text' : 'Markdown'}
                 </Text>
               </Flex>
@@ -395,6 +524,8 @@ const ConversationDetail: React.FC = () => {
         
         .conversation-metadata {
           margin-top: 16px;
+          align-items: flex-start;
+          gap: 16px;
         }
         
         .message-card {
@@ -418,6 +549,17 @@ const ConversationDetail: React.FC = () => {
           flex-wrap: wrap;
         }
         
+        .messages-header {
+          flex-wrap: wrap;
+          gap: 12px;
+          align-items: center;
+        }
+        
+        .markdown-toggle-btn {
+          min-width: fit-content;
+          flex-shrink: 0;
+        }
+        
         @media (max-width: 768px) {
           .conversation-detail-container {
             padding: 16px;
@@ -438,6 +580,11 @@ const ConversationDetail: React.FC = () => {
             display: none;
           }
           
+          .back-button {
+            flex-shrink: 0;
+            min-width: 40px;
+          }
+          
           .conversation-id {
             font-size: 12px;
             word-break: break-all;
@@ -452,6 +599,7 @@ const ConversationDetail: React.FC = () => {
           .conversation-metadata {
             flex-direction: column;
             gap: 8px;
+            align-items: stretch;
           }
           
           .date-text {
@@ -471,6 +619,8 @@ const ConversationDetail: React.FC = () => {
           
           .message-badges {
             justify-content: flex-start;
+            align-items: center;
+            flex-wrap: wrap;
           }
           
           .message-time {
@@ -492,6 +642,7 @@ const ConversationDetail: React.FC = () => {
           .conversation-metadata {
             flex-direction: column;
             gap: 8px;
+            align-items: stretch;
           }
           
           .metadata-card {
@@ -501,6 +652,21 @@ const ConversationDetail: React.FC = () => {
           .message-badges {
             flex-wrap: wrap;
             gap: 4px;
+            align-items: center;
+          }
+          
+          .messages-header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 12px;
+          }
+          
+          .markdown-toggle-btn {
+            align-self: flex-end;
+          }
+          
+          .markdown-toggle-btn .button-text {
+            display: none;
           }
         }
       `}</style>

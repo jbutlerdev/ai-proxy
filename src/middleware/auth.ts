@@ -47,9 +47,74 @@ export async function authenticateApiKey(
 ) {
   const authHeader = req.headers.authorization;
   
-  // API is open - authentication is optional for tracking only
+  // Require authorization header
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    // Use anonymous API key for tracking
+    return res.status(401).json({
+      error: {
+        message: 'No API key provided. Please include Authorization: Bearer <api-key> header.',
+        type: 'invalid_request_error',
+        code: 'invalid_api_key'
+      }
+    });
+  }
+
+  const apiKey = authHeader.substring(7);
+
+  try {
+    const results = await db
+      .select({
+        id: apiKeys.id,
+        key: apiKeys.key,
+        name: apiKeys.name,
+        active: apiKeys.active,
+      })
+      .from(apiKeys)
+      .where(eq(apiKeys.key, apiKey))
+      .limit(1);
+
+    if (results.length === 0) {
+      return res.status(401).json({
+        error: {
+          message: 'Invalid API key provided.',
+          type: 'invalid_request_error',
+          code: 'invalid_api_key'
+        }
+      });
+    }
+
+    if (!results[0].active) {
+      return res.status(401).json({
+        error: {
+          message: 'API key has been disabled.',
+          type: 'invalid_request_error',
+          code: 'invalid_api_key'
+        }
+      });
+    }
+
+    req.apiKey = results[0];
+    next();
+  } catch (error) {
+    console.error('Auth error:', error);
+    return res.status(500).json({
+      error: {
+        message: 'Internal server error during authentication.',
+        type: 'server_error',
+        code: 'server_error'
+      }
+    });
+  }
+}
+
+export async function authenticateApiKeyOptional(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const authHeader = req.headers.authorization;
+  
+  // If no auth header, use anonymous API key for tracking
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
     req.apiKey = await getAnonymousApiKey();
     return next();
   }

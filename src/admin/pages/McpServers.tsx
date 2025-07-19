@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Box, Card, Flex, Text, Button, TextField, Switch, Table, Dialog, TextArea, Badge } from '@radix-ui/themes';
-import { Plus, Server, Edit2, Trash2, RefreshCw, Eye, Key } from 'lucide-react';
+import { Box, Card, Flex, Text, Button, TextField, Switch, Table, Dialog, TextArea, Badge, DropdownMenu } from '@radix-ui/themes';
+import { Plus, Server, Edit2, Trash2, RefreshCw, Eye, Key, MoreHorizontal } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { adminApi } from '../api/client';
 
@@ -565,36 +565,7 @@ const McpServers: React.FC = () => {
                       />
                     </Table.Cell>
                     <Table.Cell className="actions-cell">
-                      <Flex gap="2">
-                        {server.command.includes('workspace-mcp') && (
-                          <Button
-                            size="1"
-                            variant="ghost"
-                            onClick={() => handleAuthenticate(server)}
-                            color="blue"
-                          >
-                            <Key size={14} />
-                            <span className="button-text">Auth</span>
-                          </Button>
-                        )}
-                        <Button
-                          size="1"
-                          variant="ghost"
-                          onClick={() => handleDiscover(server)}
-                          disabled={discovering}
-                        >
-                          <Eye size={14} />
-                          <span className="button-text">Discover</span>
-                        </Button>
-                        <Button
-                          size="1"
-                          variant="ghost"
-                          onClick={() => handleViewAvailableTools(server)}
-                          disabled={loadingTools}
-                        >
-                          <Server size={14} />
-                          <span className="button-text">Available</span>
-                        </Button>
+                      <Flex align="center" gap="2">
                         <Button
                           size="1"
                           variant="ghost"
@@ -602,28 +573,46 @@ const McpServers: React.FC = () => {
                           disabled={syncMutation.isPending}
                         >
                           <RefreshCw size={14} />
-                          <span className="button-text">Sync</span>
                         </Button>
-                        <Button
-                          size="1"
-                          variant="ghost"
-                          onClick={() => handleEdit(server)}
-                        >
-                          <Edit2 size={14} />
-                          <span className="button-text">Edit</span>
-                        </Button>
-                        <Button
-                          size="1"
-                          variant="ghost"
-                          color="red"
-                          onClick={() => {
-                            if (confirm('Are you sure you want to delete this MCP server?')) {
-                              deleteMutation.mutate(server.id);
-                            }
-                          }}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
+                        <DropdownMenu.Root>
+                          <DropdownMenu.Trigger>
+                            <Button size="1" variant="ghost">
+                              <MoreHorizontal size={14} />
+                            </Button>
+                          </DropdownMenu.Trigger>
+                          <DropdownMenu.Content>
+                            {server.command.includes('workspace-mcp') && (
+                              <DropdownMenu.Item onClick={() => handleAuthenticate(server)}>
+                                <Key size={14} />
+                                Authenticate
+                              </DropdownMenu.Item>
+                            )}
+                            <DropdownMenu.Item onClick={() => handleDiscover(server)} disabled={discovering}>
+                              <Eye size={14} />
+                              Discover Tools
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item onClick={() => handleViewAvailableTools(server)} disabled={loadingTools}>
+                              <Server size={14} />
+                              View Available Tools
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Separator />
+                            <DropdownMenu.Item onClick={() => handleEdit(server)}>
+                              <Edit2 size={14} />
+                              Edit
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item 
+                              color="red"
+                              onClick={() => {
+                                if (confirm('Are you sure you want to delete this MCP server?')) {
+                                  deleteMutation.mutate(server.id);
+                                }
+                              }}
+                            >
+                              <Trash2 size={14} />
+                              Delete
+                            </DropdownMenu.Item>
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Root>
                       </Flex>
                     </Table.Cell>
                   </Table.Row>
@@ -829,6 +818,22 @@ const McpServers: React.FC = () => {
           display: flex;
           gap: 8px;
           flex-wrap: wrap;
+        }
+        
+        /* Desktop table actions styling */
+        .actions-column,
+        .actions-cell {
+          width: 88px;
+          min-width: 88px;
+          padding: 8px 4px;
+        }
+        
+        .actions-cell button {
+          width: 32px;
+          height: 32px;
+          min-width: 32px;
+          flex-shrink: 0;
+          padding: 0;
         }
         
         @media (max-width: 768px) {

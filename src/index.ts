@@ -218,7 +218,17 @@ app.post('/v1/embeddings', authenticateApiKey, async (req, res) => {
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../public'), {
     maxAge: 0,
-    etag: false
+    etag: false,
+    setHeaders: (res, filePath) => {
+      // Set proper MIME type for manifest.json
+      if (filePath.endsWith('manifest.json')) {
+        res.setHeader('Content-Type', 'application/manifest+json');
+      }
+      // Set cache control for service worker
+      if (filePath.endsWith('sw.js')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    }
   }));
   
   // Only catch non-API routes
